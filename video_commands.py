@@ -13,7 +13,7 @@ import matplotlib.font_manager as fm
 import tempfile
 import shutil
 import fractions
-#import cv2
+import cv2
 import numpy as np
 from typing import Optional
 from deep_translator import GoogleTranslator
