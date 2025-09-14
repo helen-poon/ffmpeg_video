@@ -13,8 +13,11 @@ import matplotlib.font_manager as fm
 import tempfile
 import shutil
 import fractions
-import cv2
+#import cv2
 import numpy as np
+from typing import Optional
+from deep_translator import GoogleTranslator
+
 
 
 def write_srt(segments, file):
@@ -36,7 +39,7 @@ def write_srt(segments, file):
 
 
 def voice_to_srt(video_file, outputsrt, lang=None): #convert voice to subtitles in srt format
-    print("source /Users/china_108/Desktop/python/whisper-env/bin/activate")
+    print("Remember to switch to whisper environment first!")
     import whisper
     import opencc
     model = whisper.load_model("base")  # or "medium", "large", etc.
@@ -56,6 +59,59 @@ def voice_to_srt(video_file, outputsrt, lang=None): #convert voice to subtitles 
         print(f'"{outputsrt}" created (overwritten if existed)')
     else:
         print(f'Error: "{outputsrt}" not created or is empty')
+        
+
+def translate_srt_google(input_path, output_path, target_lang, source_lang="auto"):
+    """
+    Read an SRT file from `input_path`, translate only the subtitle text lines,
+    and write the translated SRT to `output_path`.
+
+    Parameters:
+        input_path (str): path to the input .srt file
+        output_path (str): path to write the translated .srt file
+        target_lang (str): target language code (e.g. "en", "ja", "zh-cn")
+        source_lang (str): source language code or "auto" (default "auto")
+    
+    Returns:
+        str: the translated SRT content (also written to output_path)
+    """
+    # translator (single instance)
+    translator = GoogleTranslator(source=source_lang, target=target_lang)
+
+    # read file (tolerant to encoding issues)
+    with open(input_path, "r", encoding="utf-8", errors="replace") as f:
+        lines = f.read().splitlines()
+
+    out_lines = []
+    for line in lines:
+        stripped = line.strip()
+        # keep index lines, timestamps, and blank lines unchanged
+        if stripped == "" or stripped.isdigit() or "-->" in line:
+            out_lines.append(line)
+            continue
+
+        # translate subtitle text only
+        try:
+            translated = translator.translate(stripped)
+        except Exception as e:
+            # on error, keep original and print a short warning
+            print(f"Warning: translation failed for line (kept original): {stripped[:60]}...  ({e})")
+            translated = stripped
+
+        out_lines.append(translated)
+
+    # join and ensure final newline
+    result = "\n".join(out_lines) + "\n"
+
+    # write output
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(result)
+
+    return result
+
+
+
+
 
 
 def deepl_translate_srt(input_file, output_file,lang): #translation using deepl
@@ -426,8 +482,8 @@ def make_rescaled_image(video_width, video_height, image_name, output_filename,c
             output_filename
         ]
     
-        print("FFmpeg command:", ' '.join(cmd))
-    
+        print("Rescaling image: \n", ' '.join(cmd))
+            
         # Run the FFmpeg command
         result = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     
@@ -447,7 +503,7 @@ def make_rescaled_image(video_width, video_height, image_name, output_filename,c
             output_filename
         ]
         
-        print("FFmpeg command:", ' '.join(cmd))
+        print("Rescaling video \n:", ' '.join(cmd))
         
         # Run the FFmpeg command
 
@@ -481,10 +537,9 @@ def make_rescaled_image(video_width, video_height, image_name, output_filename,c
        if result.stderr:
           print(f"FFmpeg error: {result.stderr}")
     return output_filename
-
-
+  
 #separate audio from video and save them as different files, with audio in wav format
-def separate_audio_video(input_video_path,outfolder,volume_factor):
+def separate_audio_video(input_video_path, outfolder, volume_factor):
     """
     Separate the audio and video streams from an input video file.
     
@@ -503,35 +558,54 @@ def separate_audio_video(input_video_path,outfolder,volume_factor):
         base_name = input_path.stem
         extension = input_path.suffix
         if volume_factor == 0:
-            muted_video_path = os.path.join(outfolder,f"{base_name}_muted{extension}")
+            muted_video_path = os.path.join(outfolder, f"{base_name}_muted{extension}")
         else:
-            muted_video_path = os.path.join(outfolder,f"{base_name}_{volume_factor}{extension}")
-        audio_path = os.path.join(outfolder,f"{base_name}.wav")
-        
+            muted_video_path = os.path.join(outfolder, f"{base_name}_{volume_factor}{extension}")
+        audio_path = os.path.join(outfolder, f"{base_name}.wav")
+
         # Check if input file exists
         if not input_path.exists():
             raise FileNotFoundError(f"Input file {input_video_path} does not exist")
-        
-        # Create muted video (video stream only)
-        """
-        mute_cmd = [
-            'ffmpeg',
+
+        # Check if video has audio stream
+        check_audio_cmd = [
+            'ffprobe',
             '-i', input_video_path,
-            '-an',  # disable audio
-            '-c:v', 'copy',  # copy video stream without re-encoding
-            muted_video_path
-        ]
-        """
-        mute_cmd = [
-            'ffmpeg',
-            '-y',
-            '-i', input_video_path,
-            '-filter:a', f'volume={volume_factor}',
-            '-c:v', 'copy',  # copy video stream without re-encoding
-            muted_video_path
+            '-show_streams',
+            '-select_streams', 'a',
+            '-loglevel', 'error'
         ]
         
-        print(f"Creating video of {volume_factor} sound volume : {muted_video_path}")
+        audio_check = subprocess.run(
+            check_audio_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True
+        )
+        print("Checking if the video has an audio stream: \n"," ".join(check_audio_cmd))
+        has_audio = audio_check.returncode == 0 and audio_check.stdout.strip() != ''
+
+        # Create video with adjusted audio volume (if audio exists)
+        if has_audio:
+            mute_cmd = [
+                'ffmpeg',
+                '-y',
+                '-i', input_video_path,
+                '-filter:a', f'volume={volume_factor}',
+                '-c:v', 'copy',
+                muted_video_path
+            ]
+        else:
+            mute_cmd = [
+                'ffmpeg',
+                '-y',
+                '-i', input_video_path,
+                '-an',  # No audio stream to process
+                '-c:v', 'copy',
+                muted_video_path
+            ]
+        print(f"Creating video with adjusted audio: \n"," ".join(mute_cmd))
+        print(f"Creating video with adjusted audio: {muted_video_path}")
         mute_result = subprocess.run(
             mute_cmd,
             stdout=subprocess.PIPE,
@@ -540,53 +614,52 @@ def separate_audio_video(input_video_path,outfolder,volume_factor):
         )
         
         if mute_result.returncode != 0:
-            raise Exception(f"Error creating muted video: {mute_result.stderr}")
-        
-        # Extract audio as WAV
-        audio_cmd = [
-            'ffmpeg',
-            '-i', input_video_path,
-            '-vn',  # disable video
-            '-acodec', 'pcm_s16le',  # PCM 16-bit little-endian (standard WAV format)
-            '-ar', '44100',  # sample rate 44.1kHz
-            '-ac', '2',  # stereo audio
-            audio_path
-        ]
-        
-        print("FFmpeg command for extracting audio as wav:", ' '.join(audio_cmd))
+            raise Exception(f"Error creating video: {mute_result.stderr}")
 
-        print(f"Extracting audio: {audio_path}")
-        audio_result = subprocess.run(
-            audio_cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
-        
-        if audio_result.returncode != 0:
-            # Clean up the muted video if audio extraction failed
-            if os.path.exists(muted_video_path):
-                os.remove(muted_video_path)
-            raise Exception(f"Error extracting audio: {audio_result.stderr}")
-        
-        # Verify both files were created
+        # Extract audio only if audio stream exists
+        if has_audio:
+            audio_cmd = [
+                'ffmpeg',
+                '-i', input_video_path,
+                '-vn',
+                '-acodec', 'pcm_s16le',
+                '-ar', '44100',
+                '-ac', '2',
+                audio_path
+            ]
+            print(f"Extracting audio: \n"," ".join(audio_cmd))
+            print(f"Extracting audio: {audio_path}")
+            audio_result = subprocess.run(
+                audio_cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True
+            )
+            print(" ".join(audio_cmd))
+            if audio_result.returncode != 0:
+                if os.path.exists(muted_video_path):
+                    os.remove(muted_video_path)
+                raise Exception(f"Error extracting audio: {audio_result.stderr}")
+        else:
+            audio_path = None
+            print("No audio stream found - skipping audio extraction")
+
+        # Verify the video file was created
         if not os.path.exists(muted_video_path):
-            raise Exception(f"Muted video file was not created: {muted_video_path}")
-        
-        if not os.path.exists(audio_path):
-            raise Exception(f"Audio file was not created: {audio_path}")
-        
+            raise Exception(f"Output video file was not created: {muted_video_path}")
+
         print(f"Successfully created:")
-        print(f"  - {volume_factor} volume video: {muted_video_path}")
-        print(f"  - Audio: {audio_path}")
+        print(f"  - Adjusted video: {muted_video_path}")
+        if has_audio:
+            print(f"  - Audio: {audio_path}")
+        else:
+            print(f"  - Audio: None (no audio stream found)")
         
         return True, muted_video_path, audio_path
-        
+
     except Exception as e:
-        print(f"Error: {e}")
+        print(f"Error: {str(e)}")
         return False, None, None
-
-
 
 def parse_time(t):
 #    Convert time input into seconds (float).
@@ -1196,9 +1269,11 @@ def create_ending_film(ass_file, song_file, output_file, width, height,
 
     print("FFmpeg command:\n", " ".join(cmd))
     subprocess.run(cmd, check=True)
+    
+
 
 #reencode all files so that they have the same codec, this is for concatenation
-def reencode_to_match(primary_video, list_to_reencode,crf="23", preset="fast",purpose = "combine"):
+def reencode_to_match(primary_video, list_to_reencode, crf="23", preset="fast", purpose="combine"):
     """
     Re-encode a batch of videos to PCM, then rescale them using make_rescaled_image,
     and finally pad/truncate audio to match video duration.
@@ -1209,6 +1284,18 @@ def reencode_to_match(primary_video, list_to_reencode,crf="23", preset="fast",pu
 
     reencoded_files = []
     all_videos = [primary_video] + list_to_reencode
+
+    # Helper function to check if a video has audio
+    def has_audio_stream(video_path):
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "a",
+            "-show_entries", "stream=codec_type",
+            "-of", "csv=p=0",
+            video_path
+        ]
+        result = subprocess.run(cmd, capture_output=True, text=True)
+        return result.stdout.strip() != ''
 
     for input_video in all_videos:
         if not os.path.exists(input_video):
@@ -1223,32 +1310,55 @@ def reencode_to_match(primary_video, list_to_reencode,crf="23", preset="fast",pu
         cmd_probe = [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=width,height,r_frame_rate",
+            "-show_entries", "stream=width,height,r_frame_rate,duration",
             "-of", "json",
             primary_video
         ]
+        print("Get main video's codec: \n"," ".join(cmd_probe))
         v_info = json.loads(subprocess.run(cmd_probe, capture_output=True, text=True).stdout)["streams"][0]
         width, height = v_info["width"], v_info["height"]
         fps_str = v_info["r_frame_rate"]
         primary_fps = float(fractions.Fraction(fps_str))
+        primary_video_duration = v_info["duration"]
 
-        # Step 2: Re-encode to PCM
-        cmd_ffmpeg_reencode = [
-            "ffmpeg", "-y", "-i", input_video,
-            "-r", str(primary_fps),
-            "-c:v", "libx264",
-            "-c:a", "pcm_s16le",
-            "-ar", "44100",
-            "-ac", "2",
-            "-preset", preset,
-            "-crf", str(crf),
-            tmp_file
-        ]
-        print(f"⚡ Re-encoding audio to PCM: {input_video} → {tmp_file}")
+        # Check if the video has an audio stream
+        has_audio = has_audio_stream(input_video)
+        
+        # Step 2: Re-encode to PCM (with silent audio if needed)
+        if has_audio:
+            cmd_ffmpeg_reencode = [
+                "ffmpeg", "-y", "-i", input_video,
+                "-r", str(primary_fps),
+                "-c:v", "libx264",
+                "-c:a", "pcm_s16le",
+                "-ar", "44100",
+                "-ac", "2",
+                "-preset", preset,
+                "-crf", str(crf),
+                tmp_file
+            ]
+        else:
+            # Add silent audio stream using anullsrc
+            cmd_ffmpeg_reencode = [
+                "ffmpeg", "-y", "-i", input_video,
+                "-f", "lavfi", "-i", "anullsrc=channel_layout=stereo:sample_rate=44100",
+                "-r", str(primary_fps),
+                "-c:v", "libx264",
+                "-c:a", "pcm_s16le",
+                "-ar", "44100",
+                "-ac", "2",
+                "-preset", preset,
+                "-crf", str(crf),
+                "-shortest",  # Ensure output duration matches video duration
+                "-map", "0:v", "-map", "1:a",  # Map video from first input, audio from second
+                tmp_file
+            ]
+        print("Re-encode to PCM: \n"," ".join(cmd_ffmpeg_reencode))
+        print(f"⚡ Re-encoding {'with audio' if has_audio else 'with silent audio'}: {input_video} → {tmp_file}")
         subprocess.run(cmd_ffmpeg_reencode, check=True)
 
         # Step 3: Rescale/pad video using make_rescaled_image
-        make_rescaled_image(width, height, tmp_file,final_output,crf=crf,preset=preset,purpose="combine")
+        make_rescaled_image(width, height, tmp_file, final_output, crf=crf, preset=preset, purpose="combine")
 
         # Delete temporary re-encoded file
         if os.path.exists(tmp_file):
@@ -1273,6 +1383,7 @@ def reencode_to_match(primary_video, list_to_reencode,crf="23", preset="fast",pu
             padded_output
         ]
         print(f"⚡ Padding audio to match video: {final_output} → {padded_output}")
+        print("Pad/truncate audio to match video duration: \n"," ".join(cmd_ffmpeg_pad))
         subprocess.run(cmd_ffmpeg_pad, check=True)
 
         # Remove original final_output, keep padded one
@@ -1286,8 +1397,6 @@ def reencode_to_match(primary_video, list_to_reencode,crf="23", preset="fast",pu
     reencode_list = {item: re_item for item, re_item in zip(all_videos, reencoded_files)}
 
     return reencoded_files, reencode_list
-
-  
 
 # all audios are in aac format for concatenation
 def combine_video(video_list, primary_index=1, output_file="output.mp4", crf=23, preset="fast"):
