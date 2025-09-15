@@ -13,10 +13,9 @@ import matplotlib.font_manager as fm
 import tempfile
 import shutil
 import fractions
-import cv2
 import numpy as np
 from typing import Optional
-from deep_translator import GoogleTranslator
+
 
 
 
@@ -75,6 +74,7 @@ def translate_srt_google(input_path, output_path, target_lang, source_lang="auto
     Returns:
         str: the translated SRT content (also written to output_path)
     """
+    from deep_translator import GoogleTranslator
     # translator (single instance)
     translator = GoogleTranslator(source=source_lang, target=target_lang)
 
@@ -108,11 +108,6 @@ def translate_srt_google(input_path, output_path, target_lang, source_lang="auto
         f.write(result)
 
     return result
-
-
-
-
-
 
 def deepl_translate_srt(input_file, output_file,lang): #translation using deepl
     import deepl
@@ -187,7 +182,7 @@ def combine_srt(file1_path, file2_path, output_path):
     min_length = min(len(subs1), len(subs2))
     
     for i in range(min_length):
-        new_text = subs2[i]['text'] + subs1[i]['text']  # file2 text first
+        new_text = subs1[i]['text'] + subs2[i]['text']  # file1 text first
         combined.append({
             'index': subs1[i]['index'],
             'time': subs1[i]['time'],
@@ -202,6 +197,37 @@ def combine_srt(file1_path, file2_path, output_path):
             f.write("\n".join(sub['text']) + "\n\n")
     print(f"{output_path} created")
 
+
+def separate_srt_languages(input_file, language_choice, output_file):
+    language_choice = str(language_choice)
+    with open(input_file, 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    blocks = content.strip().split('\n\n')
+    output_blocks = []
+    
+    for block in blocks:
+        lines = block.split('\n')
+        if len(lines) < 3:
+            continue
+        
+        index_line = lines[0]
+        time_line = lines[1]
+        text_lines = lines[2:]
+        
+        if language_choice == '1':
+            selected_text = text_lines[0]
+        elif language_choice == '2':
+            selected_text = text_lines[1] if len(text_lines) > 1 else ''
+        else:
+            raise ValueError("Language choice must be '1' or '2'")
+        
+        new_block = f"{index_line}\n{time_line}\n{selected_text}"
+        output_blocks.append(new_block)
+    
+    with open(output_file, 'w', encoding='utf-8') as f:
+        f.write('\n\n'.join(output_blocks))
+    print(f"{output_file} created")
 
 #extracting part of the video, say 1:00-2:00 from the original video
 def trim_video(input_file, start_time, end_time, output_file,crf=18, preset = "veyfast"):
@@ -261,6 +287,7 @@ def get_media_dimensions(file_path):
            
 #active dimensions does not include blacking padding. For portrait videos, you get a dimension of width > height because black padding is included. this would cause issues in rescaling
 def get_media_active_dimensions(file_path, threshold=16, sample_frames=5):
+    import cv2
     cap = cv2.VideoCapture(file_path)
     if not cap.isOpened():
         print(f"Cannot open video: {file_path}")
