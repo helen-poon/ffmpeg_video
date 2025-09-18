@@ -1074,9 +1074,11 @@ def _td_to_time(td):
 
 #produce an ass file of the credits at the end
 def end_credits_ass(template_file, txt_file, output_file, width, height,
-                   first_start="0:00:01.40", each_duration_s=6.0,
-                   line_offset_s=0.60,
-                   fallback_duration_s=4.0):
+                     first_start="0:00:01.40", each_duration_s=6.0,
+                     line_offset_s=0.60,
+                     fallback_duration_s=4.0):
+
+    from datetime import timedelta
 
     def _time_to_td(t_str):
         h, m, s = t_str.split(":")
@@ -1090,6 +1092,10 @@ def end_credits_ass(template_file, txt_file, output_file, width, height,
         s = total_sec % 60
         return f"{h}:{m:02}:{s:05.2f}"
 
+    # convert every normal/full-width space into an ASS hard-space override {\h}
+    def _convert_spaces(text):
+        return text.replace(" ", "\\h\\h")
+
     # Read template
     with open(template_file, "r", encoding="utf-8") as f:
         tpl_lines = [ln.rstrip("\n") for ln in f]
@@ -1099,7 +1105,7 @@ def end_credits_ass(template_file, txt_file, output_file, width, height,
     base_font = int(100 * scale)
     end_font = int(110 * scale)
 
-    # Adjust PlayResX, PlayResY, Style font size
+    # Adjust template font sizes and resolution
     adjusted_tpl = []
     for ln in tpl_lines:
         if ln.startswith("PlayResX:"):
@@ -1132,53 +1138,57 @@ def end_credits_ass(template_file, txt_file, output_file, width, height,
     before_events = adjusted_tpl[:fmt_idx + 1]
     events_tail  = adjusted_tpl[fmt_idx + 1:]
 
-    # Parse credits.txt into grouped entries
+    # Parse credits.txt into raw lines (keep leading spaces)
     with open(txt_file, "r", encoding="utf-8") as f:
-        raw = [ln.rstrip("\n") for ln in f]
-
-    entries, current = [], []
-    for ln in raw:
-        if not ln.strip():
-            continue
-        if ln.startswith(" "):
-            current.append(ln.strip())
-        else:
-            if current:
-                entries.append(current)
-            current = [ln.strip()]
-    if current:
-        entries.append(current)
+        raw_lines = [ln.rstrip("\n") for ln in f if ln.rstrip("\n") != ""]
 
     # Build credit Dialogue lines
     start_time = _time_to_td(first_start)
     dur = timedelta(seconds=each_duration_s)
-    line_offset = timedelta(seconds=line_offset_s)
+    offset = timedelta(seconds=line_offset_s)
     credit_lines = []
 
-    def _credit_line(st_td, et_td, text, line_index=0):
+    def _credit_line(st_td, et_td, text):
         center_x = width // 2
-        start_y = height + int(40 * scale) * line_index
+        start_y = height
         end_y = int(height * 0.05)  # finish near top (5% margin)
         move_tag = f"{{\\move({center_x},{start_y},{center_x},{end_y})}}"
         return f"Dialogue: 0,{_td_to_time(st_td)},{_td_to_time(et_td)},White,,0,0,0,,{move_tag}{text}"
 
-    for entry in entries:
-        line_ends = []
-        for idx, text in enumerate(entry):
-            st = start_time + line_offset * idx
-            et = st + dur
-            credit_lines.append(_credit_line(st, et, text, line_index=idx))
-            line_ends.append(et)
-        start_time = max(line_ends)
+    prev_normal_end = start_time
+    prev_line_start = None
 
-    last_credit_end = start_time
+    for ln in raw_lines:
+        # detect "indented" if first 3 chars are spaces (normal or full-width)
+        is_indented = len(ln) >= 3 and all(ch in (" ", "　") for ch in ln[:3])
+
+        if is_indented:
+            # start = previous normal *start* + offset (fallback to prev_normal_end if prev_line_start is None)
+            if prev_line_start is None:
+                st = prev_normal_end
+            else:
+                st = prev_line_start + offset
+            et = st + dur
+            # convert ALL spaces (including leading ones) to {\h}
+            converted = _convert_spaces(ln)
+            credit_lines.append(_credit_line(st, et, converted))
+            prev_normal_end = et
+        else:  # normal line
+            st = prev_normal_end
+            et = st + dur
+            converted = _convert_spaces(ln)
+            credit_lines.append(_credit_line(st, et, converted))
+            prev_line_start = st
+            prev_normal_end = et
+
+    last_credit_end = prev_normal_end
     fallback = timedelta(seconds=fallback_duration_s)
 
     adjusted_events = []
     original_dialogue_lines = [ln for ln in events_tail if "Dialogue:" in ln]
     other_lines = [ln for ln in events_tail if ln not in original_dialogue_lines]
 
-    # Retime fs90 lines sequentially
+    # Retime original lines sequentially after credits
     if original_dialogue_lines:
         st = last_credit_end + timedelta(seconds=1)
         for i, ln in enumerate(original_dialogue_lines):
@@ -1199,6 +1209,10 @@ def end_credits_ass(template_file, txt_file, output_file, width, height,
             f.write(ln + "\n")
         for ln in adjusted_events:
             f.write(ln + "\n")
+
+
+
+
 
 #create and ending film with the credits as an ass file
 def create_ending_film(ass_file, song_file, output_file, width, height,
